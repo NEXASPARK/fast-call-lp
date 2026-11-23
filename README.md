@@ -39,7 +39,14 @@ STUDIO（fast-call.canvi.co.jp）から書き出したページを、Vercel で�
 `INQUIRY_FROM` は Resend で認証済みの `lp.canvi.co.jp` のアドレス（`秒速架電 <info@lp.canvi.co.jp>`）。`canvi.co.jp` 本体のアドレスは Resend が 403 で拒否します。
 
 ### 本番DNS
-管理先はお名前.com。STUDIO の A レコード（`fast-call` → `34.111.141.225`）を削除し、Vercel の Domains 画面に表示される CNAME と TXT（`_vercel`）を追加します。
+管理先はお名前.com。STUDIO の A レコード（`fast-call` → `34.111.141.225`）を削除し、次の2件を追加する（TTLは3600）。
+
+| TYPE | ホスト名 | 値 |
+| --- | --- | --- |
+| CNAME | `fast-call` | `48d30d9342e5fcb8.vercel-dns-016.com` |
+| TXT | `_vercel` | `vc-domain-verify=fast-call.canvi.co.jp,f8befe015d89591bc200` |
+
+`_vercel` の TXT は他のサブドメイン用が既にあるので、上書きせず1件追加する。切り替え後、`fast-call-lp.vercel.app` は `fast-call.canvi.co.jp` へ308転送にする。
 
 ## フォーム送信
 
