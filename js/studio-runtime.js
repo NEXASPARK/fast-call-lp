@@ -3,7 +3,7 @@
  * STUDIO本体のJSの代わりに、以下の動きだけを再現します。
  *   1. スクロールで要素がふわっと出るアニメーション（.appear → .appear-active）
  *   2. よくある質問などのアコーディオン（_isClose ⇔ _isOpen）
- *   3. お問い合わせフォームの送信
+ *   3. お問い合わせフォームの送信（/api/contact。成功時に GA4 の generate_lead）
  */
 (function () {
   'use strict';
@@ -60,7 +60,9 @@
   }
 
   /* ---------- 3. フォーム送信 ---------- */
-  // 送信先URLは <form data-endpoint="..."> で指定します（README参照）
+  // /api/contact → メール通知・自動返信 → Canvas登録 → Slack通知。成功時に GA4 の generate_lead を送る
+  var FORM_ENDPOINT = '/api/contact';
+
   function showMessage(form, text, isError) {
     var box = form.querySelector('.form-message');
     if (!box) {
@@ -75,52 +77,70 @@
     box.textContent = text;
   }
 
+  // 全角数字・各種ハイフンをそろえ、数字10〜15桁か確認する（サーバー側でも同じ検証をする）
+  function checkTel(tel) {
+    if (!tel) return;
+    tel.value = tel.value.replace(/[０-９]/g, function (c) { return String.fromCharCode(c.charCodeAt(0) - 0xfee0); })
+      .replace(/[‐‑‒–—―ー－−]/g, '-').replace(/（/g, '(').replace(/）/g, ')').replace(/＋/g, '+')
+      .replace(/[\s　]+/g, ' ').trim();
+    var digits = tel.value.replace(/\D/g, '').length;
+    tel.setCustomValidity(/^[0-9+\-() ]+$/.test(tel.value) && digits >= 10 && digits <= 15
+      ? '' : '電話番号を10〜15桁の数字で入力してください。');
+  }
+
   function initForms() {
-    document.querySelectorAll('form').forEach(function (form) {
-      var btn = form.querySelector('button');
-      if (btn) btn.setAttribute('type', 'submit');
+    var form = document.querySelector('form[name="form1"]');
+    if (!form) return;
+    var btn = form.querySelector('button');
+    var tel = form.querySelector('[name="tel"]');
+    var sending = false;
+    var submitted = false;
+    if (btn) btn.setAttribute('type', 'submit');
+    if (tel) tel.addEventListener('input', function () { tel.setCustomValidity(''); });
 
-      form.addEventListener('submit', function (e) {
-        e.preventDefault();
+    form.addEventListener('submit', function (e) {
+      e.preventDefault();
+      if (sending || submitted) return;
+      checkTel(tel);
+      if (!form.reportValidity()) return;
+      var topics = form.querySelectorAll('input[name="topic"]');
+      if (topics.length && !Array.prototype.some.call(topics, function (cb) { return cb.checked; })) {
+        showMessage(form, '「お問い合わせ内容」を1つ以上選択してください。', true);
+        topics[0].focus();
+        return;
+      }
 
-        if (!form.reportValidity()) return;
-        var groups = {};
-        form.querySelectorAll('input[type="checkbox"]:not([required])').forEach(function (cb) {
-          (groups[cb.name] = groups[cb.name] || []).push(cb);
-        });
-        for (var name in groups) {
-          if (!groups[name].some(function (cb) { return cb.checked; })) {
-            showMessage(form, '「' + name + '」を1つ以上選択してください。', true);
-            groups[name][0].focus();
-            return;
-          }
+      // lp-analytics.js が付けた流入元の hidden field も含めて送る
+      var fd = new FormData(form);
+      var body = {};
+      fd.forEach(function (value, key) { if (key !== 'topic') body[key] = value; });
+      body.topic = fd.getAll('topic').join('、');
+      body.form = form.getAttribute('data-form') || 'contact';
+
+      sending = true;
+      if (btn) btn.disabled = true;
+      showMessage(form, '送信中です…', false);
+      fetch(FORM_ENDPOINT, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      }).then(function (res) {
+        if (!res.ok) throw new Error(res.status);
+        return res.json();
+      }).then(function (result) {
+        if (!result || result.ok !== true) throw new Error('送信失敗');
+        submitted = true; // 二重登録を防ぐため、送信後はボタンを押せないままにする
+        form.reset();
+        showMessage(form, 'お問い合わせありがとうございます。内容を確認のうえ、担当者よりご連絡いたします。', false);
+        // 成功した申込だけを計測。ハニーポットで破棄した送信（lead_id なし）は数えない
+        if (result.lead_id && window.LPAnalytics) {
+          try { window.LPAnalytics.lead(result.lead_id); } catch (err) { /* 計測の失敗で再送させない */ }
         }
-
-        var endpoint = form.getAttribute('data-endpoint');
-        if (!endpoint) {
-          showMessage(form, 'フォームの送信先が未設定です。お手数ですが別の方法でお問い合わせください。', true);
-          return;
-        }
-
-        var data = {};
-        new FormData(form).forEach(function (value, key) {
-          data[key] = data[key] ? data[key] + ', ' + value : value;
-        });
-
-        if (btn) btn.disabled = true;
-        fetch(endpoint, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
-          body: JSON.stringify(data)
-        }).then(function (res) {
-          if (!res.ok) throw new Error(res.status);
-          form.reset();
-          showMessage(form, 'お問い合わせありがとうございます。内容を確認のうえ、担当者よりご連絡いたします。', false);
-        }).catch(function () {
-          showMessage(form, '送信に失敗しました。時間をおいて再度お試しください。', true);
-        }).finally(function () {
-          if (btn) btn.disabled = false;
-        });
+      }).catch(function () {
+        showMessage(form, '送信に失敗しました。時間をおいて再度お試しいただくか、info@canvi.co.jp までご連絡ください。', true);
+        if (btn) btn.disabled = false;
+      }).then(function () {
+        sending = false;
       });
     });
   }

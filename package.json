@@ -1,0 +1,11 @@
+{
+  "name": "fast-call-lp",
+  "private": true,
+  "description": "秒速架電 LP（fast-call.canvi.co.jp）。Vercel の静的サイト＋/api/contact",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "test": "node --test tests/*.test.cjs"
+  }
+}
